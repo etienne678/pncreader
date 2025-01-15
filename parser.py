@@ -1,3 +1,23 @@
+#!/usr/bin/env python3
+import os
+import sys
+
+# Automatically locate and activate the virtual environment in the project folder
+current_dir = os.path.dirname(os.path.abspath(__file__))
+venv_path = os.path.join(current_dir, "venv")  # Adjust "venv" to match your virtual environment folder name
+
+# Activate the virtual environment if not already active
+activate_this = os.path.join(venv_path, 'bin', 'activate_this.py')
+if os.path.exists(activate_this):
+    with open(activate_this) as file:
+        exec(file.read(), dict(__file__=activate_this))
+
+# Add the virtual environment's site-packages to sys.path
+site_packages = os.path.join(venv_path, 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages')
+if site_packages not in sys.path:
+    sys.path.insert(0, site_packages)
+
+
 import csv
 import itertools
 import logging
