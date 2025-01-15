@@ -66,12 +66,14 @@ def parse_transaction_text(data: list):
     total_deposits = 0.0
     expected_deposits = 0.0
     expected_deductions = 0.0
+    transaction_year = None  # To store the extracted year
     
     # Regex patterns for identifying transaction sections and entries
     check_pattern = re.compile(r'\d+ \d+\.\d{2} \d{2}/\d{2}')
     trans_pattern = re.compile(r'^\d{2}/\d{2} (\d{1,3}(,\d{3})*|\d*)\.\d{2} ')
     totals_pattern = re.compile(r'^(\d{1,3}(?:,\d{3})*\.\d{2}-?)(?: (\d{1,3}(?:,\d{3})*\.\d{2}-?)){3}$')
-    
+    date_period_pattern = re.compile(r'For the period \d{2}/\d{2}/(\d{4}) to')  # Extract the year
+
     # Reserved keywords indicating the start of new sections
     reserved: Tuple[str] = (
         'Deposits and Other Additions',
@@ -81,6 +83,18 @@ def parse_transaction_text(data: list):
         'Other Deductions',
         'Daily Balance Detail',
     )
+    
+    # Extract the year from the "For the period" line
+    for line in data:
+        match = date_period_pattern.search(line)
+        if match:
+            transaction_year = match.group(1)  # Extracted year as a string
+            break
+    
+    if not transaction_year:
+        log.error("Could not find the transaction year in the statement. Defaulting to current year.")
+        from datetime import datetime
+        transaction_year = str(datetime.now().year)  # Default to current year if not found
     
     # This will get the next line while processing; two iters, one ahead by an item
     head, tail = itertools.tee(data)
@@ -119,13 +133,15 @@ def parse_transaction_text(data: list):
             for i in range(0, len(tokens), 4):
                 check_num = tokens[i]
                 amount = round(float(tokens[i+1].replace(',', '')), 2)
-                date = tokens[i+2]
+                date = f"{tokens[i+2]}/{transaction_year}"  # Add year to the date
+                date = re.sub(r'/', '.', date)  # Replace all slashes with dots
                 reference = tokens[i+3]
                 description = f'Check number: {check_num} [ref:{reference}]'
                 transactions.append(Transaction(date, trans_type, amount, description))
         elif trans_type in (TransactionType.DEDUCTION, TransactionType.DEPOSIT) and trans_pattern.match(line):
             tokens = line.split()
-            date = tokens[0]
+            date = f"{tokens[0]}/{transaction_year}"  # Add year to the date
+            date = re.sub(r'/', '.', date)  # Replace all slashes with dots
             amount = round(float(tokens[1].replace(',', '')), 2)
             description = ' '.join(tokens[2:])
             # Append description from the next line if not part of another transaction
@@ -190,7 +206,7 @@ def parse_pdfs_to_csv(output_csv: str):
     
     # Open the CSV file for writing
     with open(output_csv, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['Date', 'Type', 'Amount', 'Description']
+        fieldnames = ['Date', 'Description', 'Amount']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         
         # Write the header row
@@ -211,11 +227,22 @@ def parse_pdfs_to_csv(output_csv: str):
                 
                     # Write each transaction to the CSV file
                     for transaction in transactions:
+                        # Reformat date from MM/DD/YYYY to DD.MM.YYYY
+                        month, day, year = transaction.date.split('.')  # Split on .
+                        formatted_date = f"{day}.{month}.{year}"  # Rearrange to DD.MM.YYYY
+                        
+                        # Determine the amount sign
+                        if transaction.type in (TransactionType.DEDUCTION, TransactionType.CHECK):
+                            amount = -transaction.amount  # Withdrawals and checks are negative
+                        elif transaction.type == TransactionType.DEPOSIT:
+                            amount = transaction.amount  # Deposits are positive
+                        else:
+                            amount = 0.0  # Fallback in case of unexpected type
+
                         writer.writerow({
-                            'Date': transaction.date,
-                            'Type': transaction.type.name,
-                            'Amount': transaction.amount,
-                            'Description': transaction.description
+                            'Date': formatted_date,
+                            'Description': transaction.description,
+                            'Amount': amount
                         })
                     log.info(f"Finished processing {pdf_file}.")
                 else:
