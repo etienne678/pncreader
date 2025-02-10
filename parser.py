@@ -17,7 +17,6 @@ site_packages = os.path.join(venv_path, 'lib', f'python{sys.version_info.major}.
 if site_packages not in sys.path:
     sys.path.insert(0, site_packages)
 
-
 import csv
 import itertools
 import logging
@@ -86,13 +85,12 @@ def parse_transaction_text(data: list):
     total_deposits = 0.0
     expected_deposits = 0.0
     expected_deductions = 0.0
-    transaction_year = None  # To store the extracted year
-    
+
     # Regex patterns for identifying transaction sections and entries
     check_pattern = re.compile(r'\d+ \d+\.\d{2} \d{2}/\d{2}')
     trans_pattern = re.compile(r'^\d{2}/\d{2} (\d{1,3}(,\d{3})*|\d*)\.\d{2} ')
     totals_pattern = re.compile(r'^(\d{1,3}(?:,\d{3})*\.\d{2}-?)(?: (\d{1,3}(?:,\d{3})*\.\d{2}-?)){3}$')
-    date_period_pattern = re.compile(r'For the period \d{2}/\d{2}/(\d{4}) to')  # Extract the year
+    period_pattern = re.compile(r'For the period (\d{2})/(\d{2})/(\d{4}) to (\d{2})/(\d{2})/(\d{4})')
 
     # Reserved keywords indicating the start of new sections
     reserved: Tuple[str] = (
@@ -104,17 +102,22 @@ def parse_transaction_text(data: list):
         'Daily Balance Detail',
     )
     
-    # Extract the year from the "For the period" line
+    # Extract the statement period from the "For the period" line
+    start_year = None
+    end_year = None
+    start_month = None
     for line in data:
-        match = date_period_pattern.search(line)
+        match = period_pattern.search(line)
         if match:
-            transaction_year = match.group(1)  # Extracted year as a string
+            start_month, _, start_year, _, _, end_year = match.groups()
             break
-    
-    if not transaction_year:
-        log.error("Could not find the transaction year in the statement. Defaulting to current year.")
+    if not start_year:
+        log.error("Could not find the transaction period in the statement. Defaulting to current year for all transactions.")
         from datetime import datetime
-        transaction_year = str(datetime.now().year)  # Default to current year if not found
+        current_year = str(datetime.now().year)
+        start_year = current_year
+        end_year = current_year
+        start_month = '01'
     
     # This will get the next line while processing; two iters, one ahead by an item
     head, tail = itertools.tee(data)
@@ -153,14 +156,30 @@ def parse_transaction_text(data: list):
             for i in range(0, len(tokens), 4):
                 check_num = tokens[i]
                 amount = round(float(tokens[i+1].replace(',', '')), 2)
-                date = f"{tokens[i+2]}/{transaction_year}"  # Add year to the date
+                month, day = tokens[i+2].split('/')
+                if start_year != end_year:
+                    if int(month) >= int(start_month):
+                        year = start_year
+                    else:
+                        year = end_year
+                else:
+                    year = start_year
+                date = f"{month}/{day}/{year}"
                 date = re.sub(r'/', '.', date)  # Replace all slashes with dots
                 reference = tokens[i+3]
                 description = f'Check number: {check_num} [ref:{reference}]'
                 transactions.append(Transaction(date, trans_type, amount, description))
         elif trans_type in (TransactionType.DEDUCTION, TransactionType.DEPOSIT) and trans_pattern.match(line):
             tokens = line.split()
-            date = f"{tokens[0]}/{transaction_year}"  # Add year to the date
+            month, day = tokens[0].split('/')
+            if start_year != end_year:
+                if int(month) >= int(start_month):
+                    year = start_year
+                else:
+                    year = end_year
+            else:
+                year = start_year
+            date = f"{month}/{day}/{year}"
             date = re.sub(r'/', '.', date)  # Replace all slashes with dots
             amount = round(float(tokens[1].replace(',', '')), 2)
             description = ' '.join(tokens[2:])
